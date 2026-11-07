@@ -1,0 +1,53 @@
+
+
+use ventas_tech_db;
+
+GO
+
+ -- Ticket promedio real vs. representativo. Calculá la media y la mediana del total de ventas de RetailPro
+ -- Resultado: media_tkt $644.4, mediana_tkt $385. La media es aproximadamente un 67,38% mayor a la mediana. Esto significa que la media no es significativa ya que
+ -- esta influenciada por las ventas extremas. El KPI de Ticket Promedio no seria representativo. 
+ SELECT 
+    AVG(CAST(cantidad * precio_unitario AS FLOAT)) AS media_ticket,
+    (SELECT DISTINCT 
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY cantidad * precio_unitario) OVER() 
+     FROM dbo.ventas) AS mediana_ticket
+FROM dbo.ventas;
+
+--  Detección de outliers con IQR. 
+-- Resultado: Q1 = 228, Q3 = 559.5, IQR = 559.5, Limite inferior = -$611.25, Limite superior = 1,626.75. Es importante resaltar que el limite inferior real es 0.00 ya que
+-- las ventas representan ingresos.
+-- Hay solo un producto outlier, la Laptop Pro 15 cuyo valor unitario es de $1,200. Se identifico la venta de dos Laptop Pro 15, lo que altero el valor de la media, aumentandola
+-- y haciendo al tkt promedio un KPI poco representativo.
+-- Esta dispersion es un evento legitimo del negocio dado que surge de las ventas de productos de mayor precio que los que mayormente se venden.
+WITH q AS (
+    SELECT DISTINCT
+        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY (cantidad * precio_unitario)) OVER (), 2) AS q1,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY (cantidad * precio_unitario)) OVER (), 2) AS q3
+    FROM dbo.ventas
+)
+SELECT 
+    q1, 
+    q3,
+    ROUND((q3 - q1), 2) AS iqr,
+    ROUND(q1 - 1.5 * (q3 - q1), 2) AS limite_inferior,
+    ROUND(q3 + 1.5 * (q3 - q1), 2) AS limite_superior
+FROM q;
+
+WITH q AS (
+    SELECT DISTINCT
+        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY (cantidad * precio_unitario)) OVER () AS q1,
+        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY (cantidad * precio_unitario)) OVER () AS q3
+    FROM dbo.ventas
+)
+SELECT 
+    v.id_venta,
+    v.fecha_venta,
+    v.id_cliente,
+    v.id_producto,
+    v.cantidad,
+    (v.cantidad * v.precio_unitario) AS total_venta
+FROM dbo.ventas v, q
+WHERE (v.cantidad * v.precio_unitario) < (q.q1 - 1.5 * (q.q3 - q.q1))
+   OR (v.cantidad * v.precio_unitario) > (q.q3 + 1.5 * (q.q3 - q.q1))
+ORDER BY total_venta DESC;
